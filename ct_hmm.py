@@ -606,13 +606,11 @@ class Patient:
         else:
             return alpha_predict
 
-    def viterbi_outer_decoding(self, ct_hmm_learner, time_step = 1):
+    def viterbi_outer_decoding(self, ct_hmm_learner):
         '''
         @params ct_hmm_learner: the CT_HMM_LEARNER object
-        @params time_step: calculate 
         @return state trajectory with time_steps from initial to final observation time
         '''
-        curr_time = self.observation_times[0]
         enter_state_time = np.zeros(ct_hmm_learner.num_state)
         miu_vals = np.zeros(ct_hmm_learner.num_state)
         best_state_path = [[] for i in range(ct_hmm_learner.num_state)]
@@ -624,17 +622,11 @@ class Patient:
             state_pi0 = ct_hmm_learner.pi0[i]   
             miu_vals[i] = state_pi0 * gaussian_emissions[i]
 
-        times = np.arange(self.observation_times[0], self.observation_times[-1], 1).tolist()
-        for i in range(1, len(self.observation_times)):
-            bisect.insort(times, self.observation_times[i])
+        times = self.observation_times
 
-        while curr_time <= self.end_time:
-            if curr_time in self.observation_times:
-                idx = self.observation_times.index(curr_time)
-                gaussian_emissions = self.emission_Gaussian(ct_hmm_learner, self.O[idx])
-            else:
-                gaussian_emissions = 1
-
+        for idx, curr_time in enumerate(times):
+            
+            gaussian_emissions = self.emission_Gaussian(ct_hmm_learner, self.O[idx])
 
             for state_t in range(ct_hmm_learner.num_state):
                 temp_miu_t_vals = []
