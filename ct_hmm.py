@@ -624,19 +624,21 @@ class Patient:
 
         times = self.observation_times
 
-        for idx, curr_time in enumerate(times):
-            
+        for idx, curr_time in enumerate(times[1:], start = 1):
+
             gaussian_emissions = self.emission_Gaussian(ct_hmm_learner, self.O[idx])
 
             for state_t in range(ct_hmm_learner.num_state):
                 temp_miu_t_vals = []
                 for state_t_minus_1 in range(ct_hmm_learner.num_state):
                     q_t_minus_1_i = ct_hmm_learner.Q[state_t_minus_1, state_t_minus_1]
+                    if q_t_minus_1_i == 0: # total probability of previous state
+                        continue
 
-                    if state_t == state_t_minus_1:
+                    if state_t == state_t_minus_1: # might need to be modified for blowing up vals who knows
                         transition_prob = (-q_t_minus_1_i) * np.exp(q_t_minus_1_i*(curr_time - enter_state_time[state_t_minus_1]))
                     else:
-                        transition_prob = ct_hmm_learner.Q[state_t_minus_1, state_t] / q_t_minus_1_i
+                        transition_prob = ct_hmm_learner.Q[state_t_minus_1, state_t] / (-q_t_minus_1_i)
                     temp_miu_t_vals.append(gaussian_emissions[state_t] * transition_prob * miu_vals[state_t_minus_1])
 
                 # now we choose which previous state best connects to the current state
@@ -646,8 +648,11 @@ class Patient:
                     enter_state_time[state_t] = curr_time
                 miu_vals[state_t] = temp_miu_t_vals[best_state_t_minus_1_for_state_t]
                 best_state_path[state_t].append(best_state_t_minus_1_for_state_t)
+                if len(best_state_path[state_t]) >= 2 :
+                    if (best_state_path[state_t][-1] < best_state_path[state_t][-2]):
+                        import pdb; pdb.set_trace()
 
-        return best_state_path, times
+        return miu_vals, best_state_path, times
 
     def decode_most_probable_state_seq_SSA(self, ct_hmm_learner, start_s, end_s, T):
         lambda_list = np.zeros(self.num_state)
@@ -658,7 +663,7 @@ class Patient:
             row = ct_hmm_learner.Q[i,:]
             Vij_mat[i, :] = row / qi
 
-        SSAProb_patient = SSAProb(L=lambda_list, T=Vij_mat, Starts=start_s, Time=T, Time=MaxDom=0, 
+        SSAProb_patient = SSAProb(L=lambda_list, T=Vij_mat, Starts=start_s, Time=T, MaxDom=0, 
             HasSpecificEndState=True, Ends=end_s, Q_mat=ct_hmm_learner.Q)
 
         SSAProb_patient.StateSequenceAnalyze()
@@ -729,7 +734,7 @@ class SSAProb:
             TempSeq["seq"] = Start
             TempSeq["p"] = exp(-self.L(Start) * self.TimeGrid) #probability of sequence
             TempSeq["ndom"] = 0
-             self.Seqs[Start, Start].append(TempSeq)
+            self.Seqs[Start, Start].append(TempSeq)
 
             # add a single step extension 
             for j in range(NStates):
@@ -773,7 +778,7 @@ class SSAProb:
                 if ItsAKeeper:
                     for i in range(NStates):
                         # ==============================================
-                        if self.T[Seq[-1], i] > 0  # Direct Transition Path
+                        if self.T[Seq[-1], i] > 0:  # Direct Transition Path
                             # ==============================================
                             if self.HasSpecificEndState == False: # Added by Yu-ying
                                 Queue.append((Seq, i))
@@ -836,7 +841,7 @@ class SSAProb:
         # First, we loop through all TimesToDo, probs at that time point, then find
         # all sequences with probability in the top M.
         for t in TimesToDo: # there is only one timetodo which is the time between outer viterbi states
-            i = np.argwhere(self.TimeGrid == t):
+            i = np.argwhere(self.TimeGrid == t)
             if len(i) == 0:
                 print(f"Warning: ExtractMaxSeqs did not find time {t} among TimeGrid")
 
@@ -860,21 +865,21 @@ class SSAProb:
                                 TempSeqs.append((Starts, Ends, S))
 
             # MaxSeqsByTime
-            MaxSeqsByTime{i} = TempSeqs
+            MaxSeqsByTime[i] = TempSeqs
             MaxSeqsByTime_Keys.append(i)
 
         SeqList = []
         for i in MaxSeqsByTime_Keys:
-            SeqList.append(MaxSeqsByTime{i})
-        SeqList = list(dict.fromkeys(SeqList)) 
+            SeqList.append(MaxSeqsByTime[i])
+        SeqList = np.array(list(dict.fromkeys(SeqList)))
 
         for i in MaxSeqsByTime_Keys:
-            N = len(MaxSeqsByTime{i})
+            N = len(MaxSeqsByTime[i])
             TempList = []
             for j in range(N):
-                TempList.append(np.argwhere(MaxSeqsByTime[i][j,0]==SeqList(:,0) and 
-                                            MaxSeqsByTime[i][j,1]==SeqList(:,1) and 
-                                            MaxSeqsByTime[i][j,2]==SeqList(:,2)))
+                TempList.append(np.argwhere(MaxSeqsByTime[i][j,0]==SeqList[:,0] and #SeqList might not be the correct structure for this 
+                                            MaxSeqsByTime[i][j,1]==SeqList[:,1] and 
+                                            MaxSeqsByTime[i][j,2]==SeqList[:,2]))
             MaxSeqsByTime[i] = TempList
 
         return MaxSeqsByTime, SeqList
@@ -917,7 +922,7 @@ class SSAProb:
         for i in range(len(InSeqs[Start, End])):
             TempDiff = InSeqs[Start, End][i]["p"][1:] - NewSeq["p"][1:]
             # If NewSeq is dominated...
-            if (TempDiff > 0).all()
+            if (TempDiff > 0).all():
                 NewSeq["ndom"] += 1
 
             if (TempDiff < 0).all():
