@@ -657,13 +657,35 @@ class Patient:
 
         return best_state_path, times
 
+        def decode_most_probable_state_seq_SSA(self, ct_hmm_learner, start_s, end_s, T):
+            lambda_list = np.zeros(self.num_state)
+            Vij_mat = np.zeros((self.num_state, self.num_state))
+            for i in range(self.num_state):
+                qi = -ct_hmm_learner.Q[i,i]
+                lambda_list[i] = qi
+                row = ct_hmm_learner.Q[i,:]
+                Vij_mat[i, :] = row / qi
+
+            SSAProb_patient = SSAProb(L=lambda_list, T=Vij_mat, Starts=start_s, Time=T, Time=MaxDom=0, 
+                HasSpecificEndState=True, Ends=end_s, Q_mat=ct_hmm_learner.Q)
+
+            SSAProb_patient.StateSequenceAnalyze()
+            MaxSeqsByTime, SeqList = SSAProb_patient.ExtractMaxSeqs()
+
+            best_seq_idx = SeqList[0, 2] # first row, the 3rd component is the best sequence index
+            best_state_seq_SSA = SSAProb_patient.Seqs[start_s, end_s][best_seq_idx]["seq"]
+            best_prob_SSA = SSAProb_patient.Seqs[start_s, end_s][best_seq_idx]["p"][-1]
+
+            return best_state_seq_SSA, best_prob_SSA
+
+
 class SSAProb:
     def __init__(self,L, T, Starts, Time, MaxDom, HasSpecificEndState, Ends, Q_mat):
         '''
         @params L = vector of lambda values, one for each state of the chain
         @params T = matrix of transition probabilities
         @params Starts = Vector of possible start states that will be analyzed
-        @params Time = duration of time difference
+        @params Time = duration of time difference that we are investigating - Max
         @params MaxDom = optionally, largest number of state sequences that can dominate
                 a sequence before it is discarded. Defaults to 0, hence only
                 non-dominated sequences would be returned.
@@ -671,18 +693,25 @@ class SSAProb:
         @params Ends = Whether it ends
         @params Q_mat = matrix of transition rates
         '''
+        self.Time = Time
         self.Pt = expm(Q_mat * Time)
         self.L = L
         self.T = T
         self.Starts = Starts
-        self.TimeGrid = Time
+        self.TimeGrid = np.arange(0, Time, 1)
         self.MaxDom = MaxDom
         self.HasSpecificEndState = HasSpecificEndState
         self.Ends = Ends
 
-    def StateSequenceAnalyze():
+    def StateSequenceAnalyze(self):
         '''
-        @return SSAProb = the SSA problem being solved
+        StateSequenceAnalyze finds all non-dominated state sequences for a given
+        continuous-time Markov chain, a given start state or set of start states,
+        and a given final time. Optionally, it can, more generally, find the set
+        of state sequences dominated by no more than MaxDom other sequences. (By 
+        default, MaxDom=0, so that only the non-dominated state sequences are 
+        returned.)
+
         @return TimeGrid = the numerical grid for evaluation of state sequence
                 probabilities and likelihoods
         @return Seqs = an NxN cell array where N is the number of states of the chain,
@@ -695,10 +724,10 @@ class SSAProb:
         NStates = len(self.L)
 
         # Initialize Seqs "cell" array (legacy MATLAB cell type)
-        Seqs = np.empty((NStates, NStates), dtype=object)
+        self.Seqs = np.empty((NStates, NStates), dtype=object)
         for i in range(NStates):
             for j in range(NStates):
-                Seqs[i,j] = []
+                 self.Seqs[i,j] = []
 
         # Initialize information for start states and enqueue their possible extensions
         Queue = []
@@ -706,12 +735,30 @@ class SSAProb:
             Start = self.Starts[i]
             TempSeq = {}
             TempSeq["seq"] = Start
-            TempSeq["p"] = exp(-self.L(Start) @ self.TimeGrid.T) #probability of sequence
+            TempSeq["p"] = exp(-self.L(Start) * self.TimeGrid) #probability of sequence
             TempSeq["ndom"] = 0
-            Seqs[Start, Start].append(TempSeq)
+             self.Seqs[Start, Start].append(TempSeq)
+
+            # add a single step extension 
             for j in range(NStates):
-                if self.T[Start, j] > 0:
-                    Queue.append([Start, j])
+                if self.T[Start, j] > 0: # there is a direct transition path 
+                    # ==============================================
+                    if self.HasSpecificEndState == False: # Yu-ying code
+                        Queue.append((Start, j))
+                    else:
+                        has_path_to_end = False
+                        for g in range(len(self.Ends)):
+                            OneEnd = self.Ends[g]
+                            if (self.Pt[j, OneEnd] > 0):
+                                has_path_to_end = True
+                                break
+
+                        if has_path_to_end:
+                            Queue.append((Start, j))
+                    # ==============================================
+                # a direct path
+            # for j
+
 
         # Keep processing sequences, as long as the queue is not empty!
         while Queue:
@@ -719,26 +766,128 @@ class SSAProb:
             Seq = Queue[0]
             Queue = Queue[1:]
 
-            Parent = FindParent(Seqs, Seq)
+            Parent = self.FindParent(self.Seqs, Seq)
 
             if Parent is not None:
                 # Compute the sequence's probability curve and create a structure for it
                 TempSeq = {}
                 TempSeq["seq"] = Seq
-                TempSeq["p"] = ComputeP(Seq,Parent) #probability of sequence
+                TempSeq["p"] = self.ComputeP(Seq,Parent) #probability of sequence
                 TempSeq["ndom"] = 0
 
-                Seqs, ItsAKeeper = UpdateSeqs(Seqs, TempSeq)
+                self.Seqs, ItsAKeeper = self.UpdateSeqs(self.Seqs, TempSeq)
 
                 # If it wasn't dominated (or not too much), add the possible single-step extensions to the queue.
                 if ItsAKeeper:
                     for i in range(NStates):
-                        if self.T[Seq[-1], i] > 0:
-                            Queue.append([Seq, i])
+                        # ==============================================
+                        if self.T[Seq[-1], i] > 0  # Direct Transition Path
+                            # ==============================================
+                            if self.HasSpecificEndState == False: # Added by Yu-ying
+                                Queue.append((Seq, i))
+                            else: # Added by Yu-ying
+                                has_path_to_end = False
+                                for g in range(len(self.Ends)): # foreach possible end state
+                                    OneEnd = self.Ends[g]
+                                    if (self.Pt[i, OneEnd] > 0):
+                                        has_path_to_end = True
+                                        break
+                                if has_path_to_end:
+                                    Queue.append((Seq, i))
+                            # ==============================================
+                            # a Direct path
+                        # ==============================================
+                
+    def ExtractMaxSeqs(self):
+        '''
+        ExtractMaxSeqs is inteded to extract sequences that are maximally
+        probable somewhere, or more generally, are among the MMostProbable
+        sequences. It takes as input:
+        @params TimesToDo: One or more timepoints for which the sequences are desired.
+        @params StartStates: Vector of starts states allowed for the sequences.
+        @params EndStates: Vector of end states allwed for the sequences.
+        @params MMostProbable: Defaults to 1 -- return sequences that are among the M
+        most probable.
 
+        @params SeqList: A cell array of vectors, each giving a state sequence
+        @params MaxSeqsByTime: A cell array of up to three dimensions, corresponding to choice
+        of TimesToDo, StartStates
+        '''
+        StartStatesOrWeights = self.Starts
+        EndStatesOrWeights = 1
+        TimesToDo = self.Time
+        MMostProbable = 0 # original paper was 1, but I think it has to be 0 for python indexing - max
 
+        # Initialization
+        MaxSeqsByTime = {}
+        MaxSeqsByTime_Keys = []
 
-    def FindParent(Seqs, Seq):
+        # How many states in chain?
+        NStates = len(self.L);
+
+        # Set up start state list and weights
+        if len(StartStatesOrWeights) == NStates:
+            StartStates = np.argwhere(StartStatesOrWeights>0)
+            StartWeights = StartStatesOrWeights
+        else:
+            StartStates = StartStatesOrWeights
+            StartWeights = np.ones(NStates)
+
+        # Set up end state list and weights
+        if len(EndStatesOrWeights) == NStates:
+            EndStates = np.argwhere(EndStatesOrWeights>0)
+            EndWeights = EndStatesOrWeights
+        else:
+            EndStates = EndStatesOrWeights
+            EndWeights = np.ones(NStates)
+
+        # First, we loop through all TimesToDo, probs at that time point, then find
+        # all sequences with probability in the top M.
+        for t in TimesToDo: # there is only one timetodo which is the time between outer viterbi states
+            i = np.argwhere(self.TimeGrid == t):
+            if len(i) == 0:
+                print(f"Warning: ExtractMaxSeqs did not find time {t} among TimeGrid")
+
+            # Find cutoff probability
+            CurrProbs = []
+            for Starts in StartStates:
+                for Ends in EndStates:
+                    for S in range(len(self.Seqs[Starts, Ends])):
+                        CurrProbs.append(self.Seqs[Starts, Ends][S]["p"][i] * StartWeights[Starts] * EndWeights[Ends])
+            CuttoffProb = None
+            if len(CurrProbs) > 0:
+                CurrProbs = np.sort(CurrProbs)[::-1]
+                CutoffProb = CurrProbs[MMostProbable]
+
+            TempSeqs = []
+            if not np.isnan(CutoffProb):
+                for Starts in StartStates:
+                    for Ends in EndStates:
+                        for S in range(len(self.Seqs[Starts, Ends])):
+                            if self.Seqs[Starts, Ends][S]["p"][i] * StartWeights[Starts] * EndWeights[Ends] >= CutoffProb:
+                                TempSeqs.append((Starts, Ends, S))
+
+            # MaxSeqsByTime
+            MaxSeqsByTime{i} = TempSeqs
+            MaxSeqsByTime_Keys.append(i)
+
+        SeqList = []
+        for i in MaxSeqsByTime_Keys:
+            SeqList.append(MaxSeqsByTime{i})
+        SeqList = list(dict.fromkeys(SeqList)) 
+
+        for i in MaxSeqsByTime_Keys:
+            N = len(MaxSeqsByTime{i})
+            TempList = []
+            for j in range(N):
+                TempList.append(np.argwhere(MaxSeqsByTime[i][j,0]==SeqList(:,0) and 
+                                            MaxSeqsByTime[i][j,1]==SeqList(:,1) and 
+                                            MaxSeqsByTime[i][j,2]==SeqList(:,2)))
+            MaxSeqsByTime[i] = TempList
+
+        return MaxSeqsByTime, SeqList
+
+    def FindParent(self, Seqs, Seq):
         Parent = None
         if len(Seq) >= 2:
             PSeq = Seq[0:-1]
@@ -752,7 +901,7 @@ class SSAProb:
                         return Parent
         return Parent
 
-    def ComputeP(Seq, Parent):
+    def ComputeP(self, Seq, Parent):
         '''
         Compute the time-dependent probability of a state sequence
         '''
@@ -766,7 +915,7 @@ class SSAProb:
 
         return P[:, 0]
 
-    def UpdateSeqs(InSeqs, NewSeq):
+    def UpdateSeqs(self, InSeqs, NewSeq):
         # Start and End States
         Start = NewSeq["seq"][0]
         End = NewSeq["seq"][-1]
@@ -779,8 +928,8 @@ class SSAProb:
             if (TempDiff > 0).all()
                 NewSeq["ndom"] += 1
 
-            if (TempDiff < 0).all()
-            DomOthers.append(i)
+            if (TempDiff < 0).all():
+                DomOthers.append(i)
 
         # If NewSeq dominated, or dominated by too many other sequences, we discard it, and we're done.
         if NewSeq["ndom"] > self.MaxDom:
