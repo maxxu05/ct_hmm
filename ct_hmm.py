@@ -606,7 +606,7 @@ class Patient:
         else:
             return alpha_predict
 
-    def viterbi_decoding(self, ct_hmm_learner, time_step = 1):
+    def viterbi_outer_decoding(self, ct_hmm_learner, time_step = 1):
         '''
         @params ct_hmm_learner: the CT_HMM_LEARNER object
         @params time_step: calculate 
@@ -657,26 +657,26 @@ class Patient:
 
         return best_state_path, times
 
-        def decode_most_probable_state_seq_SSA(self, ct_hmm_learner, start_s, end_s, T):
-            lambda_list = np.zeros(self.num_state)
-            Vij_mat = np.zeros((self.num_state, self.num_state))
-            for i in range(self.num_state):
-                qi = -ct_hmm_learner.Q[i,i]
-                lambda_list[i] = qi
-                row = ct_hmm_learner.Q[i,:]
-                Vij_mat[i, :] = row / qi
+    def decode_most_probable_state_seq_SSA(self, ct_hmm_learner, start_s, end_s, T):
+        lambda_list = np.zeros(self.num_state)
+        Vij_mat = np.zeros((self.num_state, self.num_state))
+        for i in range(self.num_state):
+            qi = -ct_hmm_learner.Q[i,i]
+            lambda_list[i] = qi
+            row = ct_hmm_learner.Q[i,:]
+            Vij_mat[i, :] = row / qi
 
-            SSAProb_patient = SSAProb(L=lambda_list, T=Vij_mat, Starts=start_s, Time=T, Time=MaxDom=0, 
-                HasSpecificEndState=True, Ends=end_s, Q_mat=ct_hmm_learner.Q)
+        SSAProb_patient = SSAProb(L=lambda_list, T=Vij_mat, Starts=start_s, Time=T, Time=MaxDom=0, 
+            HasSpecificEndState=True, Ends=end_s, Q_mat=ct_hmm_learner.Q)
 
-            SSAProb_patient.StateSequenceAnalyze()
-            MaxSeqsByTime, SeqList = SSAProb_patient.ExtractMaxSeqs()
+        SSAProb_patient.StateSequenceAnalyze()
+        MaxSeqsByTime, SeqList = SSAProb_patient.ExtractMaxSeqs()
 
-            best_seq_idx = SeqList[0, 2] # first row, the 3rd component is the best sequence index
-            best_state_seq_SSA = SSAProb_patient.Seqs[start_s, end_s][best_seq_idx]["seq"]
-            best_prob_SSA = SSAProb_patient.Seqs[start_s, end_s][best_seq_idx]["p"][-1]
+        best_seq_idx = SeqList[0, 2] # first row, the 3rd component is the best sequence index
+        best_state_seq_SSA = SSAProb_patient.Seqs[start_s, end_s][best_seq_idx]["seq"]
+        best_prob_SSA = SSAProb_patient.Seqs[start_s, end_s][best_seq_idx]["p"][-1]
 
-            return best_state_seq_SSA, best_prob_SSA
+        return best_state_seq_SSA, best_prob_SSA
 
 
 class SSAProb:
