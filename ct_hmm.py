@@ -609,7 +609,7 @@ class Patient:
     def viterbi_outer_decoding(self, ct_hmm_learner):
         '''
         @params ct_hmm_learner: the CT_HMM_LEARNER object
-        @return state trajectory with time_steps from initial to final observation time
+        @return best_state_path: List of Lists. Outer list is for each state. Inner List is best previous state at a particular time, where the time is the index within inner list
         '''
         enter_state_time = np.zeros(ct_hmm_learner.num_state)
         miu_vals = np.zeros(ct_hmm_learner.num_state)
@@ -620,13 +620,13 @@ class Patient:
             enter_state_time[i] = self.observation_times[0]
 
             state_pi0 = ct_hmm_learner.pi0[i]   
-            miu_vals[i] = state_pi0 * gaussian_emissions[i]
+            miu_vals[i] = np.log(state_pi0) + np.log(gaussian_emissions[i])
 
         times = self.observation_times
 
         for idx, curr_time in enumerate(times[1:], start = 1):
 
-            gaussian_emissions = self.emission_Gaussian(ct_hmm_learner, self.O[idx])
+            log_gaussian_emissions = np.log(self.emission_Gaussian(ct_hmm_learner, self.O[idx]))
 
             for state_t in range(ct_hmm_learner.num_state):
                 temp_miu_t_vals = []
@@ -636,23 +636,36 @@ class Patient:
                         continue
 
                     if state_t == state_t_minus_1: # might need to be modified for blowing up vals who knows
-                        transition_prob = (-q_t_minus_1_i) * np.exp(q_t_minus_1_i*(curr_time - enter_state_time[state_t_minus_1]))
+                        log_transition_prob = np.log(-q_t_minus_1_i) + (q_t_minus_1_i*(curr_time - enter_state_time[state_t_minus_1]))
                     else:
-                        transition_prob = ct_hmm_learner.Q[state_t_minus_1, state_t] / (-q_t_minus_1_i)
-                    temp_miu_t_vals.append(gaussian_emissions[state_t] * transition_prob * miu_vals[state_t_minus_1])
+                        log_transition_prob = np.log(ct_hmm_learner.Q[state_t_minus_1, state_t]) - np.log(-q_t_minus_1_i)
+
+                    temp_miu_t_vals.append(log_gaussian_emissions[state_t] + log_transition_prob + miu_vals[state_t_minus_1])
+                    # temp_miu_t_vals.append(gaussian_emissions[state_t] * transition_prob * miu_vals[state_t_minus_1])
 
                 # now we choose which previous state best connects to the current state
                 best_state_t_minus_1_for_state_t = np.argmax(temp_miu_t_vals)
                 # update enter time for dwelling times if we changed states
                 if best_state_t_minus_1_for_state_t != state_t:
                     enter_state_time[state_t] = curr_time
+                # update miu vals for each state i.e. probability of the given final state's previous path for each final state, because of outer for loop
                 miu_vals[state_t] = temp_miu_t_vals[best_state_t_minus_1_for_state_t]
                 best_state_path[state_t].append(best_state_t_minus_1_for_state_t)
-                if len(best_state_path[state_t]) >= 2 :
-                    if (best_state_path[state_t][-1] < best_state_path[state_t][-2]):
-                        import pdb; pdb.set_trace()
 
-        return miu_vals, best_state_path, times
+        # best FINAL state
+        previous_state = np.argmax(miu_vals)
+        # now let us construct the best state path
+        final_best_state_path = []
+        final_best_state_path.append(previous_state)
+        # now lets iterate through all timepoints
+        for i in range(1, len(times)):
+            previous_state = best_state_path[previous_state][-i]
+            final_best_state_path.append(previous_state)
+
+        # because we were appending instead of prepending
+        final_best_state_path.reverse()
+
+        return final_best_state_path, times
 
     def decode_most_probable_state_seq_SSA(self, ct_hmm_learner, start_s, end_s, T):
         lambda_list = np.zeros(self.num_state)
