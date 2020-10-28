@@ -4,7 +4,7 @@ from scipy.stats import multivariate_normal
 from scipy.linalg import expm
 from scipy.special import logsumexp
 from scipy.interpolate import interp1d
-from scipy.integrate import odeint
+from scipy.integrate import solve_ivp
 import itertools
 import bisect
 
@@ -450,7 +450,7 @@ class Patient:
         '''
         gaussian_emissions = {}
         for i in range(len(self.O)):
-            gaussian_emissions[self.O[i]] = self. emission_Gaussian(ct_hmm_learner,self.O[i])
+            gaussian_emissions[self.O[i]] = self.emission_Gaussian(ct_hmm_learner,self.O[i])
         self.emissions = gaussian_emissions
     
     def emission_Gaussian(self,ct_hmm_learner,obs):
@@ -606,71 +606,85 @@ class Patient:
         else:
             return alpha_predict
 
+    # def viterbi_outer_decoding(self, ct_hmm_learner):
+    #     '''
+    #     @params ct_hmm_learner: the CT_HMM_LEARNER object
+    #     @return best_state_path: List of Lists. Outer list is for each state. Inner List is best previous state at a particular time, where the time is the index within inner list
+    #     '''
+    #     enter_state_time = np.zeros(ct_hmm_learner.num_state)
+    #     miu_vals = np.zeros(ct_hmm_learner.num_state)
+    #     best_state_path = [[] for i in range(ct_hmm_learner.num_state)]
+    #     log_gaussian_emissions_total = []
+
+    #     log_gaussian_emissions = np.log(self.emission_Gaussian(ct_hmm_learner, self.O[0]))
+    #     log_gaussian_emissions_total.append(log_gaussian_emissions)
+    #     for i, state in enumerate(best_state_path):
+    #         enter_state_time[i] = self.observation_times[0]
+
+    #         state_pi0 = ct_hmm_learner.pi0[i]   
+    #         miu_vals[i] = np.log(state_pi0) + log_gaussian_emissions[i]
+
+    #     times = self.observation_times
+
+    #     for idx, curr_time in enumerate(times[1:], start = 1):
+
+    #         log_gaussian_emissions = np.log(self.emission_Gaussian(ct_hmm_learner, self.O[idx]))
+    #         log_gaussian_emissions_total.append(log_gaussian_emissions)
+
+    #         for state_t in range(ct_hmm_learner.num_state):
+    #             temp_miu_t_vals = []
+    #             for state_t_minus_1 in range(ct_hmm_learner.num_state):
+    #                 q_t_minus_1_i = ct_hmm_learner.Q[state_t_minus_1, state_t_minus_1]
+    #                 if q_t_minus_1_i == 0: # total probability of previous state
+    #                     continue
+
+    #                 if state_t == state_t_minus_1: # might need to be modified for blowing up vals who knows
+    #                     log_transition_prob = np.log(-q_t_minus_1_i) + (q_t_minus_1_i*(curr_time - enter_state_time[state_t_minus_1]))
+    #                 else:
+    #                     log_transition_prob = np.log(ct_hmm_learner.Q[state_t_minus_1, state_t]) - np.log(-q_t_minus_1_i)
+
+    #                 temp_miu_t_vals.append(log_gaussian_emissions[state_t] + log_transition_prob + miu_vals[state_t_minus_1])
+    #                 # temp_miu_t_vals.append(gaussian_emissions[state_t] * transition_prob * miu_vals[state_t_minus_1])
+
+    #             # now we choose which previous state best connects to the current state
+    #             best_state_t_minus_1_for_state_t = np.argmax(temp_miu_t_vals)
+    #             # update enter time for dwelling times if we changed states
+    #             if best_state_t_minus_1_for_state_t != state_t:
+    #                 enter_state_time[state_t] = curr_time
+    #             # update miu vals for each state i.e. probability of the given final state's previous path for each final state, because of outer for loop
+    #             miu_vals[state_t] = temp_miu_t_vals[best_state_t_minus_1_for_state_t]
+    #             best_state_path[state_t].append(best_state_t_minus_1_for_state_t)
+
+    #     # best FINAL state
+    #     previous_state = np.argmax(miu_vals)
+    #     # now let us construct the best state path
+    #     final_best_state_path = []
+    #     final_best_state_path.append(previous_state)
+    #     # now lets iterate through all timepoints
+    #     for i in range(1, len(times)):
+    #         previous_state = best_state_path[previous_state][-i]
+    #         final_best_state_path.append(previous_state)
+
+    #     # because we were appending instead of prepending
+    #     final_best_state_path.reverse()
+
+    #     return final_best_state_path, times, log_gaussian_emissions_total
+
     def viterbi_outer_decoding(self, ct_hmm_learner):
-        '''
-        @params ct_hmm_learner: the CT_HMM_LEARNER object
-        @return best_state_path: List of Lists. Outer list is for each state. Inner List is best previous state at a particular time, where the time is the index within inner list
-        '''
-        enter_state_time = np.zeros(ct_hmm_learner.num_state)
-        miu_vals = np.zeros(ct_hmm_learner.num_state)
-        best_state_path = [[] for i in range(ct_hmm_learner.num_state)]
+        self.get_all_emissions_gaussian(ct_hmm_learner)
+        self.alpha_forward_recursion(ct_hmm_learner)
+        self.beta_backward_recursion(ct_hmm_learner)
 
-        gaussian_emissions = self.emission_Gaussian(ct_hmm_learner, self.O[0])
-        for i, state in enumerate(best_state_path):
-            enter_state_time[i] = self.observation_times[0]
+        Gamma = self.Alpha*self.Beta
+        state_sequence = np.argmax(Gamma, axis = 1)
 
-            state_pi0 = ct_hmm_learner.pi0[i]   
-            miu_vals[i] = np.log(state_pi0) + np.log(gaussian_emissions[i])
+        return state_sequence, self.observation_times
 
-        times = self.observation_times
-
-        for idx, curr_time in enumerate(times[1:], start = 1):
-
-            log_gaussian_emissions = np.log(self.emission_Gaussian(ct_hmm_learner, self.O[idx]))
-
-            for state_t in range(ct_hmm_learner.num_state):
-                temp_miu_t_vals = []
-                for state_t_minus_1 in range(ct_hmm_learner.num_state):
-                    q_t_minus_1_i = ct_hmm_learner.Q[state_t_minus_1, state_t_minus_1]
-                    if q_t_minus_1_i == 0: # total probability of previous state
-                        continue
-
-                    if state_t == state_t_minus_1: # might need to be modified for blowing up vals who knows
-                        log_transition_prob = np.log(-q_t_minus_1_i) + (q_t_minus_1_i*(curr_time - enter_state_time[state_t_minus_1]))
-                    else:
-                        log_transition_prob = np.log(ct_hmm_learner.Q[state_t_minus_1, state_t]) - np.log(-q_t_minus_1_i)
-
-                    temp_miu_t_vals.append(log_gaussian_emissions[state_t] + log_transition_prob + miu_vals[state_t_minus_1])
-                    # temp_miu_t_vals.append(gaussian_emissions[state_t] * transition_prob * miu_vals[state_t_minus_1])
-
-                # now we choose which previous state best connects to the current state
-                best_state_t_minus_1_for_state_t = np.argmax(temp_miu_t_vals)
-                # update enter time for dwelling times if we changed states
-                if best_state_t_minus_1_for_state_t != state_t:
-                    enter_state_time[state_t] = curr_time
-                # update miu vals for each state i.e. probability of the given final state's previous path for each final state, because of outer for loop
-                miu_vals[state_t] = temp_miu_t_vals[best_state_t_minus_1_for_state_t]
-                best_state_path[state_t].append(best_state_t_minus_1_for_state_t)
-
-        # best FINAL state
-        previous_state = np.argmax(miu_vals)
-        # now let us construct the best state path
-        final_best_state_path = []
-        final_best_state_path.append(previous_state)
-        # now lets iterate through all timepoints
-        for i in range(1, len(times)):
-            previous_state = best_state_path[previous_state][-i]
-            final_best_state_path.append(previous_state)
-
-        # because we were appending instead of prepending
-        final_best_state_path.reverse()
-
-        return final_best_state_path, times
 
     def decode_most_probable_state_seq_SSA(self, ct_hmm_learner, start_s, end_s, T):
-        lambda_list = np.zeros(self.num_state)
-        Vij_mat = np.zeros((self.num_state, self.num_state))
-        for i in range(self.num_state):
+        lambda_list = np.zeros(ct_hmm_learner.num_state)
+        Vij_mat = np.zeros((ct_hmm_learner.num_state, ct_hmm_learner.num_state))
+        for i in range(ct_hmm_learner.num_state):
             qi = -ct_hmm_learner.Q[i,i]
             lambda_list[i] = qi
             row = ct_hmm_learner.Q[i,:]
@@ -681,10 +695,11 @@ class Patient:
 
         SSAProb_patient.StateSequenceAnalyze()
         MaxSeqsByTime, SeqList = SSAProb_patient.ExtractMaxSeqs()
-
-        best_seq_idx = SeqList[0, 2] # first row, the 3rd component is the best sequence index
-        best_state_seq_SSA = SSAProb_patient.Seqs[start_s, end_s][best_seq_idx]["seq"]
-        best_prob_SSA = SSAProb_patient.Seqs[start_s, end_s][best_seq_idx]["p"][-1]
+        print(SeqList)
+        # import pdb; pdb.set_trace()
+        best_seq_idx = SeqList[0][0][2] # first row, the 3rd component is the best sequence index
+        best_state_seq_SSA = SSAProb_patient.Seqs[start_s, end_s][0][best_seq_idx]["seq"]
+        best_prob_SSA = SSAProb_patient.Seqs[start_s, end_s][0][best_seq_idx]["p"][0][-1]
 
         return best_state_seq_SSA, best_prob_SSA
 
@@ -706,9 +721,10 @@ class SSAProb:
         self.Time = Time
         self.Pt = expm(Q_mat * Time)
         self.L = L
-        self.T = T
+        self.T = T # transition prob
         self.Starts = Starts
-        self.TimeGrid = np.arange(0, Time, 1)
+        self.Ends = Ends
+        self.TimeGrid = np.arange(0, Time+Time*1e-4, Time*1e-4)
         self.MaxDom = MaxDom
         self.HasSpecificEndState = HasSpecificEndState
         self.Ends = Ends
@@ -741,11 +757,10 @@ class SSAProb:
 
         # Initialize information for start states and enqueue their possible extensions
         Queue = []
-        for i in range(len(self.Starts)):
-            Start = self.Starts[i]
+        for Start in self.Starts:
             TempSeq = {}
-            TempSeq["seq"] = Start
-            TempSeq["p"] = exp(-self.L(Start) * self.TimeGrid) #probability of sequence
+            TempSeq["seq"] = [Start]
+            TempSeq["p"] = np.exp(-self.L[Start] * self.TimeGrid) #probability of sequence
             TempSeq["ndom"] = 0
             self.Seqs[Start, Start].append(TempSeq)
 
@@ -754,7 +769,7 @@ class SSAProb:
                 if self.T[Start, j] > 0: # there is a direct transition path 
                     # ==============================================
                     if self.HasSpecificEndState == False: # Yu-ying code
-                        Queue.append((Start, j))
+                        Queue.append([Start, j])
                     else:
                         has_path_to_end = False
                         for g in range(len(self.Ends)):
@@ -764,18 +779,18 @@ class SSAProb:
                                 break
 
                         if has_path_to_end:
-                            Queue.append((Start, j))
+                            Queue.append([Start, j])
                     # ==============================================
                 # a direct path
             # for j
-
 
         # Keep processing sequences, as long as the queue is not empty!
         while Queue:
             # Get next sequence and process it unless it's parent is gone, so then it should be gone
             Seq = Queue[0]
+            # print([x+1 for x in Seq])
+            
             Queue = Queue[1:]
-
             Parent = self.FindParent(self.Seqs, Seq)
 
             if Parent is not None:
@@ -784,6 +799,7 @@ class SSAProb:
                 TempSeq["seq"] = Seq
                 TempSeq["p"] = self.ComputeP(Seq,Parent) #probability of sequence
                 TempSeq["ndom"] = 0
+
 
                 self.Seqs, ItsAKeeper = self.UpdateSeqs(self.Seqs, TempSeq)
 
@@ -794,7 +810,7 @@ class SSAProb:
                         if self.T[Seq[-1], i] > 0:  # Direct Transition Path
                             # ==============================================
                             if self.HasSpecificEndState == False: # Added by Yu-ying
-                                Queue.append((Seq, i))
+                                Queue.append(Seq + [i])
                             else: # Added by Yu-ying
                                 has_path_to_end = False
                                 for g in range(len(self.Ends)): # foreach possible end state
@@ -803,7 +819,7 @@ class SSAProb:
                                         has_path_to_end = True
                                         break
                                 if has_path_to_end:
-                                    Queue.append((Seq, i))
+                                    Queue.append(Seq + [i])
                             # ==============================================
                             # a Direct path
                         # ==============================================
@@ -823,8 +839,7 @@ class SSAProb:
         @params MaxSeqsByTime: A cell array of up to three dimensions, corresponding to choice
         of TimesToDo, StartStates
         '''
-        StartStatesOrWeights = self.Starts
-        EndStatesOrWeights = 1
+
         TimesToDo = self.Time
         MMostProbable = 0 # original paper was 1, but I think it has to be 0 for python indexing - max
 
@@ -835,64 +850,56 @@ class SSAProb:
         # How many states in chain?
         NStates = len(self.L);
 
-        # Set up start state list and weights
-        if len(StartStatesOrWeights) == NStates:
-            StartStates = np.argwhere(StartStatesOrWeights>0)
-            StartWeights = StartStatesOrWeights
-        else:
-            StartStates = StartStatesOrWeights
-            StartWeights = np.ones(NStates)
-
-        # Set up end state list and weights
-        if len(EndStatesOrWeights) == NStates:
-            EndStates = np.argwhere(EndStatesOrWeights>0)
-            EndWeights = EndStatesOrWeights
-        else:
-            EndStates = EndStatesOrWeights
-            EndWeights = np.ones(NStates)
+        StartStates = self.Starts
+        StartWeights = np.ones(NStates)
+        EndStates = self.Ends
+        EndWeights = np.ones(NStates)
 
         # First, we loop through all TimesToDo, probs at that time point, then find
         # all sequences with probability in the top M.
-        for t in TimesToDo: # there is only one timetodo which is the time between outer viterbi states
-            i = np.argwhere(self.TimeGrid == t)
-            if len(i) == 0:
-                print(f"Warning: ExtractMaxSeqs did not find time {t} among TimeGrid")
+        i = np.argwhere(self.TimeGrid == TimesToDo)[0][0] #indexing is weird idk man
 
-            # Find cutoff probability
-            CurrProbs = []
+        # Find cutoff probability
+        CurrProbs = []
+        # import pdb; pdb.set_trace()
+        for Starts in StartStates:
+            for Ends in EndStates:
+                for S in range(len(self.Seqs[Starts, Ends])):
+                    CurrProbs.append(self.Seqs[Starts, Ends][S]["p"][0,i] * StartWeights[Starts] * EndWeights[Ends])
+        print("current probabilities")
+        print(CurrProbs)
+        CutoffProb = None
+        if len(CurrProbs) > 0:
+            CurrProbs = np.sort(CurrProbs)[::-1]
+            CutoffProb = CurrProbs[MMostProbable]
+
+        TempSeqs = []
+        if CutoffProb:
             for Starts in StartStates:
                 for Ends in EndStates:
                     for S in range(len(self.Seqs[Starts, Ends])):
-                        CurrProbs.append(self.Seqs[Starts, Ends][S]["p"][i] * StartWeights[Starts] * EndWeights[Ends])
-            CuttoffProb = None
-            if len(CurrProbs) > 0:
-                CurrProbs = np.sort(CurrProbs)[::-1]
-                CutoffProb = CurrProbs[MMostProbable]
+                        if self.Seqs[Starts, Ends][S]["p"][0,i] * StartWeights[Starts] * EndWeights[Ends] >= CutoffProb:
+                            TempSeqs.append([Starts, Ends, S])
 
-            TempSeqs = []
-            if not np.isnan(CutoffProb):
-                for Starts in StartStates:
-                    for Ends in EndStates:
-                        for S in range(len(self.Seqs[Starts, Ends])):
-                            if self.Seqs[Starts, Ends][S]["p"][i] * StartWeights[Starts] * EndWeights[Ends] >= CutoffProb:
-                                TempSeqs.append((Starts, Ends, S))
-
-            # MaxSeqsByTime
-            MaxSeqsByTime[i] = TempSeqs
-            MaxSeqsByTime_Keys.append(i)
+        # MaxSeqsByTime
+        MaxSeqsByTime[i] = TempSeqs
+        MaxSeqsByTime_Keys.append(i)
 
         SeqList = []
         for i in MaxSeqsByTime_Keys:
             SeqList.append(MaxSeqsByTime[i])
-        SeqList = np.array(list(dict.fromkeys(SeqList)))
+        for i in SeqList[:]:  # using list copy for iteration
+            if SeqList.count(i) > 1:
+                SeqList.remove(i)
 
         for i in MaxSeqsByTime_Keys:
             N = len(MaxSeqsByTime[i])
             TempList = []
             for j in range(N):
-                TempList.append(np.argwhere(MaxSeqsByTime[i][j,0]==SeqList[:,0] and #SeqList might not be the correct structure for this 
-                                            MaxSeqsByTime[i][j,1]==SeqList[:,1] and 
-                                            MaxSeqsByTime[i][j,2]==SeqList[:,2]))
+                # import pdb; pdb.set_trace()
+                TempList.append(np.argwhere(MaxSeqsByTime[i][j][0]==SeqList[0][j][0] and #SeqList might not be the correct structure for this 
+                                            MaxSeqsByTime[i][j][1]==SeqList[0][j][1] and 
+                                            MaxSeqsByTime[i][j][2]==SeqList[0][j][2]))
             MaxSeqsByTime[i] = TempList
 
         return MaxSeqsByTime, SeqList
@@ -906,7 +913,7 @@ class SSAProb:
             for i in range(len(Seqs[PStart, PEnd])):
                 TempSeq = Seqs[PStart, PEnd][i]
                 if len(TempSeq["seq"]) == len(PSeq):
-                    if (TempSeq["seq"] == PSeq).all():
+                    if (TempSeq["seq"] == PSeq):
                         Parent = TempSeq
                         return Parent
         return Parent
@@ -916,14 +923,13 @@ class SSAProb:
         Compute the time-dependent probability of a state sequence
         '''
         NextToLastState = Parent["seq"][-1]
-        pfunc = lambda t: interp1d(self.TimeGrid, Parent["p"], t)
-        A = self.L[Seq[-1]]
+        pfunc = lambda t: interp1d(self.TimeGrid, Parent["p"])(t)
+        A = -self.L[Seq[-1]]
         B = self.L[Parent["seq"][-1]] * self.T[NextToLastState, Seq[-1]]
         RHS = lambda t,y: A*y + B*pfunc(t)
-
-        P = odeint(RHS, 0, self.TimeGrid)
-
-        return P[:, 0]
+        
+        P = solve_ivp(RHS, y0=[0], t_span=[np.min(self.TimeGrid), np.max(self.TimeGrid)], t_eval=list(self.TimeGrid), rtol=1e-10, atol=1e-10)
+        return P.y
 
     def UpdateSeqs(self, InSeqs, NewSeq):
         # Start and End States
@@ -933,7 +939,7 @@ class SSAProb:
         # Establish Dominance Relationships
         DomOthers = [] # Whether NewSeq dominates already found sequences
         for i in range(len(InSeqs[Start, End])):
-            TempDiff = InSeqs[Start, End][i]["p"][1:] - NewSeq["p"][1:]
+            TempDiff = InSeqs[Start, End][i]["p"][0,1:] - NewSeq["p"][0,1:]
             # If NewSeq is dominated...
             if (TempDiff > 0).all():
                 NewSeq["ndom"] += 1
@@ -954,10 +960,9 @@ class SSAProb:
                 OutSeqs[Start, End][Other]["ndom"] += 1
                 if OutSeqs[Start, End][Other]["ndom"] > self.MaxDom:
                     ToKill.append(Other)
-            if len(ToKill) != 0:
-                ToKeep = [np.arange(0, len(OutSeqs[Start, End])) not in ToKill]
-                OutSeqs[Start, End] = OutSeqs[Start, End][ToKeep]
+            OutSeqs[Start, End] = np.delete(OutSeqs[Start, End], ToKill).tolist()
 
             OutSeqs[Start, End].append(NewSeq)
+            # import pdb; pdb.set_trace()
 
         return OutSeqs, ItsAKeeper
