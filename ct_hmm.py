@@ -606,80 +606,60 @@ class Patient:
         else:
             return alpha_predict
 
-    # def viterbi_outer_decoding(self, ct_hmm_learner):
-    #     '''
-    #     @params ct_hmm_learner: the CT_HMM_LEARNER object
-    #     @return best_state_path: List of Lists. Outer list is for each state. Inner List is best previous state at a particular time, where the time is the index within inner list
-    #     '''
-    #     enter_state_time = np.zeros(ct_hmm_learner.num_state)
-    #     miu_vals = np.zeros(ct_hmm_learner.num_state)
-    #     best_state_path = [[] for i in range(ct_hmm_learner.num_state)]
-    #     log_gaussian_emissions_total = []
-
-    #     log_gaussian_emissions = np.log(self.emission_Gaussian(ct_hmm_learner, self.O[0]))
-    #     log_gaussian_emissions_total.append(log_gaussian_emissions)
-    #     for i, state in enumerate(best_state_path):
-    #         enter_state_time[i] = self.observation_times[0]
-
-    #         state_pi0 = ct_hmm_learner.pi0[i]   
-    #         miu_vals[i] = np.log(state_pi0) + log_gaussian_emissions[i]
-
-    #     times = self.observation_times
-
-    #     for idx, curr_time in enumerate(times[1:], start = 1):
-
-    #         log_gaussian_emissions = np.log(self.emission_Gaussian(ct_hmm_learner, self.O[idx]))
-    #         log_gaussian_emissions_total.append(log_gaussian_emissions)
-
-    #         for state_t in range(ct_hmm_learner.num_state):
-    #             temp_miu_t_vals = []
-    #             for state_t_minus_1 in range(ct_hmm_learner.num_state):
-    #                 q_t_minus_1_i = ct_hmm_learner.Q[state_t_minus_1, state_t_minus_1]
-    #                 if q_t_minus_1_i == 0: # total probability of previous state
-    #                     continue
-
-    #                 if state_t == state_t_minus_1: # might need to be modified for blowing up vals who knows
-    #                     log_transition_prob = np.log(-q_t_minus_1_i) + (q_t_minus_1_i*(curr_time - enter_state_time[state_t_minus_1]))
-    #                 else:
-    #                     log_transition_prob = np.log(ct_hmm_learner.Q[state_t_minus_1, state_t]) - np.log(-q_t_minus_1_i)
-
-    #                 temp_miu_t_vals.append(log_gaussian_emissions[state_t] + log_transition_prob + miu_vals[state_t_minus_1])
-    #                 # temp_miu_t_vals.append(gaussian_emissions[state_t] * transition_prob * miu_vals[state_t_minus_1])
-
-    #             # now we choose which previous state best connects to the current state
-    #             best_state_t_minus_1_for_state_t = np.argmax(temp_miu_t_vals)
-    #             # update enter time for dwelling times if we changed states
-    #             if best_state_t_minus_1_for_state_t != state_t:
-    #                 enter_state_time[state_t] = curr_time
-    #             # update miu vals for each state i.e. probability of the given final state's previous path for each final state, because of outer for loop
-    #             miu_vals[state_t] = temp_miu_t_vals[best_state_t_minus_1_for_state_t]
-    #             best_state_path[state_t].append(best_state_t_minus_1_for_state_t)
-
-    #     # best FINAL state
-    #     previous_state = np.argmax(miu_vals)
-    #     # now let us construct the best state path
-    #     final_best_state_path = []
-    #     final_best_state_path.append(previous_state)
-    #     # now lets iterate through all timepoints
-    #     for i in range(1, len(times)):
-    #         previous_state = best_state_path[previous_state][-i]
-    #         final_best_state_path.append(previous_state)
-
-    #     # because we were appending instead of prepending
-    #     final_best_state_path.reverse()
-
-    #     return final_best_state_path, times, log_gaussian_emissions_total
-
     def viterbi_outer_decoding(self, ct_hmm_learner):
-        self.get_all_emissions_gaussian(ct_hmm_learner)
-        self.alpha_forward_recursion(ct_hmm_learner)
-        self.beta_backward_recursion(ct_hmm_learner)
+        '''
+        @params ct_hmm_learner: the CT_HMM_LEARNER object
+        @return best_state_path: List of Lists. Outer list is for each state. Inner List is best previous state at a particular time, where the time is the index within inner list
+        '''
+        
+        time_diffs = [t - s for s, t in zip(self.observation_times, self.observation_times[1:])]
+        log_Pt = []
+        for time_diff in time_diffs:
+            log_Pt.append(np.log(expm(ct_hmm_learner.Q * time_diff)))
 
-        Gamma = self.Alpha*self.Beta
-        state_sequence = np.argmax(Gamma, axis = 1)
+        miu_vals = np.zeros(ct_hmm_learner.num_state)
+        best_state_path = [[] for i in range(ct_hmm_learner.num_state)]
+        log_gaussian_emissions_total = []
 
-        return state_sequence, self.observation_times
+        log_gaussian_emissions = np.log(self.emission_Gaussian(ct_hmm_learner, self.O[0]))
+        log_gaussian_emissions_total.append(log_gaussian_emissions)
+        for i, state in enumerate(best_state_path):
+            state_pi0 = ct_hmm_learner.pi0[i]
+            miu_vals[i] = np.log(state_pi0) + log_gaussian_emissions[i]
 
+        times = self.observation_times
+        for idx in range(len(time_diffs)):
+
+            log_gaussian_emissions = np.log(self.emission_Gaussian(ct_hmm_learner, self.O[idx+1]))
+            log_gaussian_emissions_total.append(log_gaussian_emissions)
+
+            temp_miu_vals_current = np.zeros(ct_hmm_learner.num_state)
+            for state_t in range(ct_hmm_learner.num_state):
+                temp_miu_t_vals = []
+                for state_t_minus_1 in range(ct_hmm_learner.num_state):
+                    log_transition_prob = log_Pt[idx][state_t_minus_1, state_t]
+                    temp_miu_t_vals.append(log_gaussian_emissions[state_t] + log_transition_prob + miu_vals[state_t_minus_1])
+                # now we choose which previous state best connects to the current state
+                best_state_t_minus_1_for_state_t = np.argmax(temp_miu_t_vals)
+                # update miu vals for each state i.e. probability of the given final state's previous path for each final state, because of outer for loop
+                temp_miu_vals_current[state_t] = temp_miu_t_vals[best_state_t_minus_1_for_state_t]
+                best_state_path[state_t].append(best_state_t_minus_1_for_state_t)
+            miu_vals = temp_miu_vals_current
+
+        # best FINAL state
+        previous_state = np.argmax(miu_vals)
+        # now let us construct the best state path
+        final_best_state_path = []
+        final_best_state_path.append(previous_state)
+        # now lets iterate through all timepoints
+        for i in range(1, len(times)):
+            previous_state = best_state_path[previous_state][-i]
+            final_best_state_path.append(previous_state)
+
+        # because we were appending instead of prepending
+        final_best_state_path.reverse()
+
+        return final_best_state_path, time_diffs
 
     def decode_most_probable_state_seq_SSA(self, ct_hmm_learner, start_s, end_s, T):
         lambda_list = np.zeros(ct_hmm_learner.num_state)
@@ -695,11 +675,13 @@ class Patient:
 
         SSAProb_patient.StateSequenceAnalyze()
         MaxSeqsByTime, SeqList = SSAProb_patient.ExtractMaxSeqs()
-        print(SeqList)
         # import pdb; pdb.set_trace()
-        best_seq_idx = SeqList[0][0][2] # first row, the 3rd component is the best sequence index
+        try:
+            best_seq_idx = SeqList[0][0][2] # first row, the 3rd component is the best sequence index
+        except:
+            import pdb;pdb.set_trace()
         best_state_seq_SSA = SSAProb_patient.Seqs[start_s, end_s][0][best_seq_idx]["seq"]
-        best_prob_SSA = SSAProb_patient.Seqs[start_s, end_s][0][best_seq_idx]["p"][0][-1]
+        best_prob_SSA = SSAProb_patient.Seqs[start_s, end_s][0][best_seq_idx]["p"][-1]
 
         return best_state_seq_SSA, best_prob_SSA
 
@@ -724,7 +706,8 @@ class SSAProb:
         self.T = T # transition prob
         self.Starts = Starts
         self.Ends = Ends
-        self.TimeGrid = np.arange(0, Time+Time*1e-4, Time*1e-4)
+        self.TimeGrid = np.arange(0, Time, Time*1e-4) # changed to e-3 due to floating point errors
+        self.TimeGrid = np.append(self.TimeGrid, Time)
         self.MaxDom = MaxDom
         self.HasSpecificEndState = HasSpecificEndState
         self.Ends = Ends
@@ -859,15 +842,14 @@ class SSAProb:
         # all sequences with probability in the top M.
         i = np.argwhere(self.TimeGrid == TimesToDo)[0][0] #indexing is weird idk man
 
+
         # Find cutoff probability
         CurrProbs = []
         # import pdb; pdb.set_trace()
         for Starts in StartStates:
             for Ends in EndStates:
                 for S in range(len(self.Seqs[Starts, Ends])):
-                    CurrProbs.append(self.Seqs[Starts, Ends][S]["p"][0,i] * StartWeights[Starts] * EndWeights[Ends])
-        print("current probabilities")
-        print(CurrProbs)
+                    CurrProbs.append(self.Seqs[Starts, Ends][S]["p"][i] * StartWeights[Starts] * EndWeights[Ends])
         CutoffProb = None
         if len(CurrProbs) > 0:
             CurrProbs = np.sort(CurrProbs)[::-1]
@@ -878,7 +860,7 @@ class SSAProb:
             for Starts in StartStates:
                 for Ends in EndStates:
                     for S in range(len(self.Seqs[Starts, Ends])):
-                        if self.Seqs[Starts, Ends][S]["p"][0,i] * StartWeights[Starts] * EndWeights[Ends] >= CutoffProb:
+                        if self.Seqs[Starts, Ends][S]["p"][i] * StartWeights[Starts] * EndWeights[Ends] >= CutoffProb:
                             TempSeqs.append([Starts, Ends, S])
 
         # MaxSeqsByTime
@@ -929,7 +911,7 @@ class SSAProb:
         RHS = lambda t,y: A*y + B*pfunc(t)
         
         P = solve_ivp(RHS, y0=[0], t_span=[np.min(self.TimeGrid), np.max(self.TimeGrid)], t_eval=list(self.TimeGrid), rtol=1e-10, atol=1e-10)
-        return P.y
+        return P.y[0]
 
     def UpdateSeqs(self, InSeqs, NewSeq):
         # Start and End States
@@ -939,7 +921,7 @@ class SSAProb:
         # Establish Dominance Relationships
         DomOthers = [] # Whether NewSeq dominates already found sequences
         for i in range(len(InSeqs[Start, End])):
-            TempDiff = InSeqs[Start, End][i]["p"][0,1:] - NewSeq["p"][0,1:]
+            TempDiff = InSeqs[Start, End][i]["p"][1:] - NewSeq["p"][1:]
             # If NewSeq is dominated...
             if (TempDiff > 0).all():
                 NewSeq["ndom"] += 1
